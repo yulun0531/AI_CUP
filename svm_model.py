@@ -76,6 +76,9 @@ for i, df in enumerate(dataframes):
 
             # 更新原始 DataFrame 中的異常值
             df.loc[df['Sunlight(Lux)'].isin(anomalous_values), 'Sunlight(Lux)'] = y_anomalous_pred_rescaled.flatten()
+        output_file_path = os.path.join(current_directory, f"L{i+1}_Processed.csv")
+        df.to_csv(output_file_path, index=False, encoding='utf-8-sig')
+        print(f"處理後的 DataFrame L{i+1} 已儲存為 {output_file_path}")
         # 繪製預測結果
         plt.figure(figsize=(8, 6))
         plt.scatter(X_test_original, y_test_original, color='b', label='Actual Sunlight (Lux)')
