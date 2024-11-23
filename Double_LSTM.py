@@ -100,6 +100,7 @@ for loc, df in enumerate(dataframes):
   # 自動抓取所有欄位並排除不需要的欄位
 # 自動抓取所有欄位並排除不需要的欄位
   exclude_columns = ['Serial','Power(mW)','LocationCode']  # 這裡列出你不需要的欄位
+  exclude_columns_for_power = ['Serial','LocationCode']  # 這裡列出你不需要的欄位
   feature_column = [col for col in df.columns if col not in exclude_columns]
   #feature_column = ['Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)', 'WindSpeed(m/s)']
   FeatLSTM_df = df[feature_column]
@@ -137,16 +138,17 @@ for loc, df in enumerate(dataframes):
   #建置LSTM模型
   regressor = Sequential ()
 
-  regressor.add(LSTM(units = 128, return_sequences = True, input_shape = (X_train.shape[1], X_train.shape[2])))
+  regressor.add(LSTM(units = 64, activation='tanh', return_sequences = True, input_shape = (X_train.shape[1], X_train.shape[2])))
 
-  regressor.add(LSTM(units = 64))
+  regressor.add(LSTM(units = 32, activation='relu'))
 
   regressor.add(Dropout(0.2))
 
   regressor.add(Dense(units = n_prediction))
+  early_stopping = EarlyStopping(monitor='loss', patience=20)
 
   regressor.compile(optimizer='adam', loss='mse', metrics=['mse', 'mape'])
-  regressor.fit(X_train, y_train, epochs = 100, batch_size = 20)
+  regressor.fit(X_train, y_train, epochs = 100, batch_size = 32, callbacks=[early_stopping])
 
   #保存模型
   p = os.path.join(model_folder, f'FeatureLSTM_{loc+1:02d}.h5')
@@ -218,16 +220,17 @@ for loc, df in enumerate(dataframes):
   model = Sequential()
 
   # 調整 LSTM 層單元數及 Dropout
-  model.add(LSTM(units = 64, activation='relu', return_sequences = True, input_shape = (X_train.shape[1], X_train.shape[2])))
-
-  model.add(LSTM(units = 32))
+  model.add(LSTM(units=64, activation='tanh', return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
+  
+  model.add(LSTM(units=32, activation='relu'))
+  
   model.add(Dropout(0.2))
 
   model.add(Dense(units=1))
 
   model.compile(optimizer='adam', loss='mse', metrics=['mse', 'mape'])
   # 進行模型訓練
-  early_stopping = EarlyStopping(monitor='val_loss', patience=20)
+  early_stopping = EarlyStopping(monitor='loss', patience=20)
 
   model.fit(X_train, y_train, epochs=100, batch_size=32, validation_split=0.2, callbacks=[early_stopping])
     
@@ -276,7 +279,9 @@ for loc, df in enumerate(dataframes):
   total_score = np.mean(np.abs(original_y_test - y_pred_rescaled))
   
   print(f"測試集的均方誤差: {total_score}")
+  
   # 繪製預測結果
+  '''
   plt.figure(figsize=(14, 5))
   plt.plot(date_time[:],original_y_test, label='actually', color='blue')
   plt.plot(date_time[:],y_pred_rescaled, label='predict', color='red')
@@ -285,6 +290,7 @@ for loc, df in enumerate(dataframes):
   plt.ylabel('power')
   plt.legend()
   plt.show()
+  '''
   
 
 #%%
@@ -296,7 +302,7 @@ for loc, df in enumerate(dataframes):
 
 fetureModels, powerModels = [], []
 feature_scalers, power_scalers = [], []
-model_folder = os.path.join(current_directory, "models", f"{timestamp}")
+model_folder = os.path.join(current_directory, "models", "20241123_164644")
 for loc in range(1, LocationCount+1):
   fetureModels.append(load_model(os.path.join(model_folder, f'FeatureLSTM_{loc:02d}.h5')))
   powerModels.append(load_model(os.path.join(model_folder,f'PowerLSTM_{loc:02d}.h5')))
@@ -317,7 +323,6 @@ PredictOutput = [] #存放預測值(天氣參數)
 PredictPower = [] #存放預測值(發電量)
 # FeatureLSTM minMax欄位順序
 #feature_column = ['Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)', 'WindSpeed(m/s)']
-feature_column = [col for col in df.columns if col not in exclude_columns]
 
 df2 = pd.DataFrame(columns=['序號', '答案'])
 
@@ -376,6 +381,14 @@ while(count < len(EXquestion)):
   SourceData = SourceData.drop(columns=['year','month','minute','day','hour','days_in_month','DateTime'])
   ReferTitle = SourceData[['Serial']].values
   ReferData = SourceData[[col for col in SourceData.columns if col not in exclude_columns]].values
+  ReferData_for_power= SourceData[[col for col in SourceData.columns if col not in exclude_columns_for_power]].values
+  feature_column = [col for col in SourceData.columns if col not in exclude_columns]
+
+  # 查看數據的形狀
+  print(feature_column)
+
+  # 顯示前 2 行數據
+  print(ReferData_for_power[:2])
   inputs = []#重置存放參考資料
   inputs_for_power = []#重置存放參考資料
 
@@ -386,10 +399,10 @@ while(count < len(EXquestion)):
       # Fix: UserWarning: X does not have valid feature names, but MinMaxScaler was fitted with feature names warnings.warn(
       TempData = pd.DataFrame(ReferData[DaysCount].reshape(1,-1), 
                             columns=feature_column)
-      TempData_for_power= pd.DataFrame(ReferData[DaysCount].reshape(1,-1), 
+      TempData_for_power= pd.DataFrame(ReferData_for_power[DaysCount].reshape(1,-1), 
                             columns=["Power(mW)"]+feature_column)
       TempDatas = Feature_MinMaxModel.transform(TempData)
-      TempDatas_for_power = Power_MinMaxModel.transform(TempData)
+      TempDatas_for_power = Power_MinMaxModel.transform(TempData_for_power)
       inputs.append(TempDatas)
       inputs_for_power.append(TempDatas_for_power)
   print(EXquestion[count])
@@ -402,7 +415,7 @@ while(count < len(EXquestion)):
     #將新的預測值加入參考資料(用自己的預測值往前看)
     if i > 0 :
       inputs.append(PredictOutput[i-1].reshape(1,11))
-      inputs_for_power.append(np.concatenate(PredictOutput[i-1], PredictOutput[i-1]).reshape(1,12))
+      inputs_for_power.append(np.concatenate([PredictPower[-1].reshape(1, 1), inputs[-1]], axis=1).reshape(1, 12))
 
     #切出新的參考資料12筆(往前看12筆)
     X_test = []
@@ -424,8 +437,6 @@ while(count < len(EXquestion)):
     predicted_power = Power_MinMaxModel.inverse_transform(
         np.concatenate((predicted_power, predicted_feature), axis=1)
     )[:, Power_index]
-    print(predicted_power)
-
     predicted_power = np.round(predicted_power,2).flatten()[0]
     
     PredictPower.append(predicted_power)
@@ -441,8 +452,3 @@ while(count < len(EXquestion)):
 # 將 DataFrame 寫入 CSV 檔案
 df2.to_csv('output.csv', index=False) 
 print('Output CSV File Saved')
-
-# %%
-# 問題1. MinMaxScalar要儲存起來在預測的時候load，不然不同地區在反縮放時會有問題
-# 已解決
-
