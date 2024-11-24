@@ -5,9 +5,10 @@ from tensorflow.keras.layers import LSTM
 from tensorflow.keras.layers import Dropout
 from tensorflow.keras.models import load_model
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras import regularizers
 
 from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler,StandardScaler
 import joblib
 
 import matplotlib.pyplot as plt
@@ -27,7 +28,7 @@ pd.options.display.float_format = '{:.6f}'.format
 current_directory = os.getcwd()
 dataframes = []
 
-for loc in range(1, LocationCount+1):  # 1 到 17
+for loc in range(0+1, LocationCount+1):  # 1 到 17
     file_name = f"ExampleTrainData(AVG)/AvgDATA_{loc:02d}.csv"
     file_path = os.path.join(current_directory, file_name)  # 合併路徑與檔名
     df = pd.read_csv(file_path)  # 讀取 CSV 檔案
@@ -115,7 +116,8 @@ for loc, df in enumerate(dataframes):
 
 
   # 正規化(MinMaxScaler 縮放)
-  Feature_MinMaxModel = MinMaxScaler(feature_range=(0, 1))
+  #Feature_MinMaxModel = MinMaxScaler(feature_range=(0, 1))
+  Feature_MinMaxModel = StandardScaler()
   train_scaled = Feature_MinMaxModel.fit_transform(train_data)
   test_scaled = Feature_MinMaxModel.transform(test_data)
 
@@ -140,15 +142,15 @@ for loc, df in enumerate(dataframes):
 
   regressor.add(LSTM(units = 64, activation='tanh', return_sequences = True, input_shape = (X_train.shape[1], X_train.shape[2])))
 
-  regressor.add(LSTM(units = 32, activation='relu'))
+  regressor.add(LSTM(units = 32, activation='relu', return_sequences=False))
 
-  regressor.add(Dropout(0.2))
+  regressor.add(Dropout(0.5))
 
   regressor.add(Dense(units = n_prediction))
-  early_stopping = EarlyStopping(monitor='loss', patience=20)
+  early_stopping = EarlyStopping(monitor='val_loss', patience=10)
 
-  regressor.compile(optimizer='adam', loss='mse', metrics=['mse', 'mape'])
-  regressor.fit(X_train, y_train, epochs = 100, batch_size = 32, callbacks=[early_stopping])
+  regressor.compile(optimizer='adam', loss='mse', metrics=['mse', 'mae'])
+  regressor.fit(X_train, y_train, epochs = 100,validation_split=0.2,batch_size = 32, callbacks=[early_stopping])
 
   #保存模型
   p = os.path.join(model_folder, f'FeatureLSTM_{loc+1:02d}.h5')
@@ -159,12 +161,12 @@ for loc, df in enumerate(dataframes):
   scaler_path = os.path.join(model_folder, f'Feature_MinMaxScaler_{loc+1:02d}.pkl')
   joblib.dump(Feature_MinMaxModel, scaler_path)
   print(f'Feature MinMaxScaler_{loc+1:02d} saved')
-  '''
+  
   
   # 準備輸入數據 (同樣需要按 LookBackNum 組合為 3D 格式)
   X_test = []
   for i in range(LookBackNum, len(test_scaled)):
-      if is_continuous_test.iloc[i-n_step:i].all():
+      if is_continuous_test.iloc[i-LookBackNum:i].all():
         X_test.append(test_scaled[i-LookBackNum:i, :])
   X_test = np.array(X_test)
 
@@ -180,7 +182,23 @@ for loc, df in enumerate(dataframes):
 
   print("First Original Data (Ground Truth):")
   print(test_data.iloc[LookBackNum:LookBackNum+10])  # 原始測試數據對應的第一筆
-  '''
+
+    # 將預測與原始數據對齊
+  ground_truth = test_data.iloc[LookBackNum:LookBackNum + len(predictions)].reset_index(drop=True)
+
+  # 計算逐列差距 (取絕對值)
+  differences = np.abs(ground_truth.values - predictions)
+
+  # 將差距轉為 DataFrame
+  diff_df = pd.DataFrame(differences, columns=ground_truth.columns)
+
+  # 逐列打印差距
+  for column in diff_df.columns:
+    column_total_diff = diff_df[column].mean()  # 計算該列的總誤差
+    print(f"Column: {column}")
+    print(f"Total Difference: {column_total_diff}")  # 打印該列的總誤差
+    print("\n")
+  
   # 訓練Power_LSTM
   # TODO: 前面12步的Power值若要當作特徵要考量縮放的問題(skip)
   # 預測欄位
@@ -199,7 +217,9 @@ for loc, df in enumerate(dataframes):
 
   
   # 正規化(MinMaxScaler 縮放)
-  Power_MinMaxModel = MinMaxScaler(feature_range=(0, 1))
+  #Power_MinMaxModel = MinMaxScaler(feature_range=(0, 1))
+  Power_MinMaxModel = StandardScaler()
+
   train_scaled = Power_MinMaxModel.fit_transform(train_data)
   test_scaled = Power_MinMaxModel.transform(test_data)
 
@@ -208,7 +228,7 @@ for loc, df in enumerate(dataframes):
   y_train = []
   for i in range(LookBackNum, len(train_scaled)):
       if is_continuous_train.iloc[i-LookBackNum:i].all():
-        X_train.append(train_scaled[i-LookBackNum:i, Power_index:])
+        X_train.append(train_scaled[i-LookBackNum:i, Power_index+1:])
         y_train.append(train_scaled[i, Power_index])
   X_train, y_train = np.array(X_train), np.array(y_train)
   # 調整輸入數據格式為 LSTM 所需的 3D 格式
@@ -222,15 +242,15 @@ for loc, df in enumerate(dataframes):
   # 調整 LSTM 層單元數及 Dropout
   model.add(LSTM(units=64, activation='tanh', return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
   
-  model.add(LSTM(units=32, activation='relu'))
+  model.add(LSTM(units=32, activation='relu', return_sequences=False))
   
-  model.add(Dropout(0.2))
+  model.add(Dropout(0.5))
 
   model.add(Dense(units=1))
 
-  model.compile(optimizer='adam', loss='mse', metrics=['mse', 'mape'])
+  model.compile(optimizer='adam', loss='mse', metrics=['mse', 'mae'])
   # 進行模型訓練
-  early_stopping = EarlyStopping(monitor='loss', patience=20)
+  early_stopping = EarlyStopping(monitor='val_loss', patience=10)
 
   model.fit(X_train, y_train, epochs=100, batch_size=32, validation_split=0.2, callbacks=[early_stopping])
     
@@ -243,7 +263,7 @@ for loc, df in enumerate(dataframes):
 
   for i in range(LookBackNum, len(test_scaled)):
     if is_continuous_test.iloc[i-LookBackNum:i].all():
-      X_test.append(test_scaled[i-LookBackNum:i, Power_index:])  # 將過去LookBackNum筆的所有特徵添加到 X_test
+      X_test.append(test_scaled[i-LookBackNum:i, Power_index+1:])  # 將過去LookBackNum筆的所有特徵添加到 X_test
       y_test.append(test_scaled[i, Power_index])  # 目標是Power
       original_y_test.append(test_data.iloc[i]['Power(mW)'])
       part1 = test_scaled[i, :Power_index]  # 不加擴展維度，保持一維
@@ -292,6 +312,7 @@ for loc, df in enumerate(dataframes):
   plt.show()
   '''
   
+  
 
 #%%
 #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'  # 顯示所有訊息（默認值）
@@ -300,9 +321,30 @@ for loc, df in enumerate(dataframes):
 #============================預測數據============================
 #載入模型
 
+def get_latest_model_directory(base_directory):
+    models_dir = os.path.join(base_directory, "models")
+    
+    # 確保 models 目錄存在
+    if not os.path.exists(models_dir):
+        raise FileNotFoundError(f"找不到 models 目錄: {models_dir}")
+    
+    # 取得所有子目錄
+    model_folders = [d for d in os.listdir(models_dir) 
+                    if os.path.isdir(os.path.join(models_dir, d))]
+    
+    if not model_folders:
+        raise FileNotFoundError(f"在 {models_dir} 中找不到任何模型資料夾")
+    
+    # 依據資料夾名稱排序（因為資料夾名稱包含時間戳記）
+    latest_folder = sorted(model_folders)[-1]
+    latest_path = os.path.join(models_dir, latest_folder)
+    
+    return latest_path
+
 fetureModels, powerModels = [], []
 feature_scalers, power_scalers = [], []
-model_folder = os.path.join(current_directory, "models", "20241123_164644")
+model_folder = get_latest_model_directory(current_directory)
+
 for loc in range(1, LocationCount+1):
   fetureModels.append(load_model(os.path.join(model_folder, f'FeatureLSTM_{loc:02d}.h5')))
   powerModels.append(load_model(os.path.join(model_folder,f'PowerLSTM_{loc:02d}.h5')))
@@ -415,7 +457,8 @@ while(count < len(EXquestion)):
     #將新的預測值加入參考資料(用自己的預測值往前看)
     if i > 0 :
       inputs.append(PredictOutput[i-1].reshape(1,11))
-      inputs_for_power.append(np.concatenate([PredictPower[-1].reshape(1, 1), inputs[-1]], axis=1).reshape(1, 12))
+      #inputs.append(PredictOutput[-1].reshape(1,11))
+      #inputs_for_power.append(np.concatenate([PredictPower[-1].reshape(1, 1), inputs[-1]], axis=1).reshape(1, 12))
 
     #切出新的參考資料12筆(往前看12筆)
     X_test = []
@@ -427,18 +470,20 @@ while(count < len(EXquestion)):
     NewTest,NewTest_for_power = np.array(X_test),np.array(X_test_for_power)
 
     NewTest = np.reshape(NewTest, (NewTest.shape[0], NewTest.shape[1], NewTest.shape[3]))
-    NewTest_for_power = np.reshape(NewTest_for_power, (NewTest_for_power.shape[0], NewTest_for_power.shape[1], NewTest_for_power.shape[3]))
+    #NewTest_for_power = np.reshape(NewTest_for_power, (NewTest_for_power.shape[0], NewTest_for_power.shape[1], NewTest_for_power.shape[3]))
 
     predicted_feature = fetureLSTM.predict(NewTest, verbose=0) #吃前12筆預測第13筆特徵
     PredictOutput.append(predicted_feature) # 預測下一筆的特徵
 
-    predicted_power = powerLSTM.predict(NewTest_for_power, verbose=0) #吃前12筆預測第13筆Power
+    predicted_power = powerLSTM.predict(NewTest, verbose=0) #吃前12筆預測第13筆Power
+
+    #predicted_power = powerLSTM.predict(NewTest_for_power, verbose=0) #吃前12筆預測第13筆Power
 
     predicted_power = Power_MinMaxModel.inverse_transform(
         np.concatenate((predicted_power, predicted_feature), axis=1)
     )[:, Power_index]
     predicted_power = np.round(predicted_power,2).flatten()[0]
-    
+    print(predicted_power)
     PredictPower.append(predicted_power)
     df2.loc[len(df2)] = {
       '序號': EXquestion[count+i][0],
@@ -452,3 +497,8 @@ while(count < len(EXquestion)):
 # 將 DataFrame 寫入 CSV 檔案
 df2.to_csv('output.csv', index=False) 
 print('Output CSV File Saved')
+
+# %%
+# 問題1. MinMaxScalar要儲存起來在預測的時候load，不然不同地區在反縮放時會有問題
+# 已解決
+
